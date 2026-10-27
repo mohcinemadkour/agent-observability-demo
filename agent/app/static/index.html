@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Control Panel</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #e6e8ee; --muted: #8b93a7;
+    --accent: #ff7a1a; --ok: #3ecf8e; --bad: #ff5d5d; --warn: #f5b942; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+           padding: 18px 28px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+  h1 span { color: var(--accent); }
+  .links a { color: var(--muted); margin-left: 16px; text-decoration: none; font-size: 14px; }
+  .links a:hover { color: var(--text); }
+  main { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 24px; padding: 24px 28px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 14px 16px; } }
+  .label { text-transform: uppercase; font-size: 11px; letter-spacing: 1.2px; color: var(--muted); margin: 0 0 10px; }
+  .scenario { width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+              border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; font: inherit; }
+  .scenario:hover { border-color: var(--accent); }
+  .scenario b { display: block; font-size: 15px; }
+  .scenario small { color: var(--muted); font-size: 13px; }
+  .scenario:disabled { opacity: .5; cursor: wait; }
+  .traffic { display: flex; align-items: center; justify-content: space-between; background: var(--panel);
+             border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-top: 18px; }
+  .pill { font: 12px var(--mono); padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); }
+  .pill.on { color: var(--ok); border-color: var(--ok); }
+  .btn { background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .btn:hover { border-color: var(--accent); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .empty { color: var(--muted); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .badge { font: 600 12px var(--mono); padding: 3px 9px; border-radius: 6px; }
+  .badge.ok { background: rgba(62,207,142,.12); color: var(--ok); }
+  .badge.bad { background: rgba(255,93,93,.12); color: var(--bad); }
+  .meta { color: var(--muted); font: 13px var(--mono); }
+  .q { color: var(--muted); margin: 0 0 6px; }
+  .answer { font-size: 16px; margin: 0 0 16px; }
+  .err { color: var(--bad); font-family: var(--mono); font-size: 13px; margin: 0 0 16px; }
+  .tools { font: 13px var(--mono); color: var(--muted); margin-bottom: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+  td:first-child { width: 28px; }
+  td.name { font-family: var(--mono); white-space: nowrap; width: 210px; }
+  .trace { display: inline-block; margin-top: 18px; background: var(--accent); color: #111; font-weight: 600;
+           padding: 9px 16px; border-radius: 8px; text-decoration: none; }
+  .note { margin-top: 14px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Maintenance Agent <span>· Observability Demo</span></h1>
+  <nav class="links">
+    <a id="dash" href="http://localhost:3001/d/agent-observability" target="_blank" rel="noopener">Grafana dashboard ↗</a>
+    <a id="jaeger" href="http://localhost:16686" target="_blank" rel="noopener">Jaeger ↗</a>
+  </nav>
+</header>
+<main>
+  <section>
+    <p class="label">Trigger a scenario</p>
+    <div id="scenarios"></div>
+    <div class="traffic">
+      <div><b>Background traffic</b><br><span class="meta" id="trafficMeta">–</span></div>
+      <div><span class="pill" id="trafficPill">…</span> <button class="btn" id="trafficBtn">toggle</button></div>
+    </div>
+  </section>
+  <section>
+    <p class="label">Last run</p>
+    <div class="card" id="result"><p class="empty">Pick a scenario. The result links straight to its trace in Grafana.</p></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function loadScenarios() {
+  const list = await (await fetch("/api/scenarios")).json();
+  $("scenarios").innerHTML = list.map((s) =>
+    `<button class="scenario" data-name="${esc(s.name)}"><b>${esc(s.title)}</b><small>${esc(s.description)}</small></button>`).join("");
+  document.querySelectorAll(".scenario").forEach((b) => b.addEventListener("click", () => run(b.dataset.name)));
+}
+
+async function run(name) {
+  const buttons = document.querySelectorAll(".scenario");
+  buttons.forEach((b) => (b.disabled = true));
+  $("result").innerHTML = `<p class="empty">Running <b>${esc(name)}</b>…</p>`;
+  try {
+    const r = await (await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
+                                               body: JSON.stringify({ scenario: name }) })).json();
+    render(r);
+  } catch (e) {
+    $("result").innerHTML = `<p class="err">${esc(e)}</p>`;
+  } finally {
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+function render(r) {
+  const ev = r.evaluation;
+  const checks = ev.checks.map((c) =>
+    `<tr><td>${c.passed ? "✅" : "❌"}</td><td class="name">${esc(c.name)}</td><td>${esc(c.explanation)}</td></tr>`).join("");
+  $("result").innerHTML = `
+    <div class="row">
+      <span class="badge ${r.outcome === "success" ? "ok" : "bad"}">run: ${esc(r.outcome)}</span>
+      <span class="badge ${ev.passed ? "ok" : "bad"}">eval: ${ev.passed ? "pass" : "fail"} · ${ev.score}</span>
+      <span class="meta">${r.duration_s}s · ${r.iterations} iterations · trace ${esc(r.trace_id.slice(0, 12))}…</span>
+    </div>
+    <p class="q">Q: ${esc(r.question)}</p>
+    ${r.answer ? `<p class="answer">${esc(r.answer)}</p>` : ""}
+    ${r.error ? `<p class="err">${esc(r.error)}</p>` : ""}
+    <div class="tools">tools → ${r.tool_calls.length ? r.tool_calls.map(esc).join(" → ") : "none"}</div>
+    <table>${checks}</table>
+    <a class="trace" href="${esc(r.grafana_trace_url)}" target="_blank" rel="noopener">Open trace in Grafana ↗</a>
+    <p class="note">Traces can take ~5s to appear in Tempo after the run.</p>`;
+}
+
+async function refreshTraffic() {
+  try {
+    const t = await (await fetch("/api/traffic")).json();
+    $("trafficPill").textContent = t.running ? "ON" : "OFF";
+    $("trafficPill").className = "pill" + (t.running ? " on" : "");
+    $("trafficMeta").textContent = `${t.runs} generated runs`;
+    $("trafficBtn").textContent = t.running ? "stop" : "start";
+    $("trafficBtn").dataset.next = t.running ? "stop" : "start";
+  } catch (_) { /* server restarting */ }
+}
+$("trafficBtn").addEventListener("click", async () => {
+  await fetch(`/api/traffic/${$("trafficBtn").dataset.next || "start"}`, { method: "POST" });
+  refreshTraffic();
+});
+
+fetch("/api/config").then((r) => r.json()).then((c) => { $("dash").href = c.grafana_url + "/d/agent-observability"; }).catch(() => {});
+loadScenarios();
+refreshTraffic();
+setInterval(refreshTraffic, 3000);
+</script>
+</body>
+</html>

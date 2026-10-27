@@ -1,0 +1,33 @@
+# Production overlay for the Collector (merged over config.yaml).
+#
+# Adds a second OTLP/HTTP receiver on :4319 that requires
+#   Authorization: Bearer <OTLP_INGEST_TOKEN>
+# Caddy exposes it at https://$OTLP_DOMAIN. The original receiver (:4317/:4318)
+# stays unauthenticated but is only reachable inside the Docker network,
+# where the demo agent uses it.
+#
+# Lists are replaced, not appended, when files are merged, so the full
+# receiver lists and the extensions list are restated here.
+
+extensions:
+  bearertokenauth/ingest:
+    scheme: Bearer
+    token: ${env:OTLP_INGEST_TOKEN}
+
+receivers:
+  otlp/external:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4319
+        auth:
+          authenticator: bearertokenauth/ingest
+
+service:
+  extensions: [health_check, bearertokenauth/ingest]
+  pipelines:
+    traces:
+      receivers: [otlp, otlp/external]
+    metrics:
+      receivers: [otlp, otlp/external, spanmetrics]
+    logs:
+      receivers: [otlp, otlp/external]

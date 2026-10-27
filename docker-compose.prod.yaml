@@ -1,0 +1,88 @@
+# Production overlay: layered on top of docker-compose.yaml on a public server.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.prod.yaml up -d --build
+#   (or simply:  ./deploy/deploy.sh)
+#
+# What it changes versus the local demo:
+#   * Only Caddy is reachable from the internet (ports 80/443). Every other port is removed.
+#   * Caddy terminates HTTPS with automatic Let's Encrypt certificates.
+#   * Grafana requires a login (no anonymous admin); clients get read-only Viewer accounts.
+#   * The control panel sits behind a password.
+#   * An optional, token-protected OTLP endpoint lets a client's own agents send telemetry.
+#   * Data survives restarts (named volumes) with bounded retention.
+#
+# Requires Docker Compose v2.24.4+ (for the `!reset` tag).
+
+services:
+  agent:
+    ports: !reset []
+    environment:
+      GRAFANA_PUBLIC_URL: https://${DASHBOARD_DOMAIN:?set DASHBOARD_DOMAIN in .env}
+
+  otel-collector:
+    ports: !reset []
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+      - --config=/etc/otelcol-contrib/overlay.prod.yaml
+    environment:
+      OTLP_INGEST_TOKEN: ${OTLP_INGEST_TOKEN:?set OTLP_INGEST_TOKEN in .env}
+
+  prometheus:
+    ports: !reset []
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${RETENTION_DAYS:-15}d
+      - --enable-feature=exemplar-storage
+    volumes:
+      - prometheus-data:/prometheus
+
+  loki:
+    volumes:
+      - loki-data:/loki
+
+  grafana:
+    ports: !reset []
+    environment:
+      GF_SERVER_ROOT_URL: https://${DASHBOARD_DOMAIN}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer
+      # Lets Viewers use Explore (open a trace, query logs) without being able to save changes.
+      GF_USERS_VIEWERS_CAN_EDIT: "true"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+  caddy:
+    image: caddy:2.8.4
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN}
+      DEMO_DOMAIN: ${DEMO_DOMAIN:?set DEMO_DOMAIN in .env}
+      OTLP_DOMAIN: ${OTLP_DOMAIN:?set OTLP_DOMAIN in .env}
+      DEMO_USER: ${DEMO_USER:-demo}
+      DEMO_PASSWORD_HASH: ${DEMO_PASSWORD_HASH:?set DEMO_PASSWORD_HASH in .env (see deploy/DEPLOY.md)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [grafana, agent, otel-collector]
+
+volumes:
+  prometheus-data:
+  loki-data:
+  grafana-data:
+  caddy-data:
+  caddy-config:

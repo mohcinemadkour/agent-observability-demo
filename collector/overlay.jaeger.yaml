@@ -1,0 +1,15 @@
+# Vendor-neutral demo, part 1: fan traces out to a SECOND backend (Jaeger).
+# Zero changes to the agent. Enable with:  make backend-jaeger
+#
+# Note: when files are merged, lists are replaced, not appended, so the full
+# exporter list of the traces pipeline is restated here.
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      exporters: [otlp/tempo, spanmetrics, otlp/jaeger]

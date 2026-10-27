@@ -1,0 +1,47 @@
+# Caddy: HTTPS reverse proxy. Certificates are obtained and renewed automatically
+# once the DNS records point at this server and ports 80/443 are open.
+
+{
+	email {$ACME_EMAIL}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+# Grafana: clients log in with their own Viewer accounts.
+{$DASHBOARD_DOMAIN} {
+	import security_headers
+	encode zstd gzip
+	reverse_proxy grafana:3000
+}
+
+# Control panel (trigger scenarios live): password-protected.
+{$DEMO_DOMAIN} {
+	import security_headers
+	basic_auth {
+		{$DEMO_USER} {$DEMO_PASSWORD_HASH}
+	}
+	reverse_proxy agent:8000
+}
+
+# OTLP/HTTP ingest for a client's own agents. The Collector checks the bearer token.
+# Only the OTLP paths are forwarded; everything else gets a 404.
+{$OTLP_DOMAIN} {
+	import security_headers
+	@otlp path /v1/traces /v1/metrics /v1/logs
+	handle @otlp {
+		request_body {
+			max_size 10MB
+		}
+		reverse_proxy otel-collector:4319
+	}
+	handle {
+		respond 404
+	}
+}

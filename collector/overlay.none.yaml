@@ -1,0 +1,6 @@
+# Default overlay: no extra backends. (Loaded as a second --config file; the
+# Collector deep-merges it over config.yaml.)
+service:
+  telemetry:
+    logs:
+      level: info

@@ -1,0 +1,94 @@
+# OpenTelemetry Collector: the ONLY place that knows about backends.
+# The agent sends OTLP here; this file decides what is enriched, redacted,
+# derived and where each signal goes.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  batch:
+    timeout: 2s
+
+  resource:
+    attributes:
+      - key: collector.pipeline
+        value: meetup-demo
+        action: upsert
+
+  # Redact PII centrally, before it reaches ANY backend. App code stays unchanged.
+  transform/redact:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - replace_all_patterns(attributes, "value", "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "<redacted:email>")
+          - replace_all_patterns(attributes, "value", "(\\+?\\d{1,3}[ .-])?\\(?\\d{3}\\)?[ .-]\\d{3}[ .-]\\d{4}", "<redacted:phone>")
+    log_statements:
+      - context: log
+        statements:
+          - replace_pattern(body, "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "<redacted:email>")
+          - replace_pattern(body, "(\\+?\\d{1,3}[ .-])?\\(?\\d{3}\\)?[ .-]\\d{3}[ .-]\\d{4}", "<redacted:phone>")
+
+connectors:
+  # Derive RED metrics (rate, errors, duration) for every span: per LLM model,
+  # per tool, per agent, with zero extra code in the app.
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [50ms, 100ms, 250ms, 500ms, 1s, 2s, 4s, 8s, 16s]
+    dimensions:
+      - name: gen_ai.operation.name
+      - name: gen_ai.request.model
+      - name: gen_ai.tool.name
+      - name: demo.scenario
+    exemplars:
+      enabled: true
+    metrics_flush_interval: 5s
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+    enable_open_metrics: true   # needed for exemplars (metric -> trace links)
+
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/redact, resource, batch]
+      exporters: [otlp/tempo, spanmetrics]
+    metrics:
+      receivers: [otlp, spanmetrics]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/redact, resource, batch]
+      exporters: [otlphttp/loki]

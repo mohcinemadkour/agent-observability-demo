@@ -1,0 +1,95 @@
+name: agent-observability
+
+services:
+  # ---------------------------------------------------------------- the agent
+  agent:
+    build: ./agent
+    ports: ["8000:8000"]
+    environment:
+      OTEL_SERVICE_NAME: maintenance-agent
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318   # the ONLY observability setting the app has
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "true"
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_MODEL: ${LLM_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TRAFFIC: ${TRAFFIC:-on}
+      TRAFFIC_INTERVAL_S: ${TRAFFIC_INTERVAL_S:-2}
+      GRAFANA_PUBLIC_URL: http://localhost:${GRAFANA_PORT:-3001}
+    depends_on: [otel-collector]
+    restart: unless-stopped
+
+  # ------------------------------------------------------- telemetry pipeline
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+      # swap or add backends here without touching the agent: none | jaeger | vendor
+      - --config=/etc/otelcol-contrib/overlay.${COLLECTOR_OVERLAY:-none}.yaml
+    volumes:
+      - ./collector:/etc/otelcol-contrib:ro
+    environment:
+      VENDOR_TRACES_URL: ${VENDOR_TRACES_URL:-}
+      VENDOR_TOKEN: ${VENDOR_TOKEN:-}
+    ports:
+      - "4317:4317"   # OTLP gRPC (for agents running outside Docker)
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus exporter (what Prometheus scrapes)
+      - "13133:13133" # health check
+    depends_on: [tempo, loki]
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------- backends
+  tempo:
+    image: grafana/tempo:2.7.1
+    user: "0"   # lets Tempo write to its volume without a chown init step
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.4.2
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/config.yaml:ro
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --enable-feature=exemplar-storage
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+    ports: ["9090:9090"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/agent-observability.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["${GRAFANA_PORT:-3001}:3000"]   # host port 3001 avoids clashing with apps that own 3000
+    depends_on: [prometheus, tempo, loki]
+    restart: unless-stopped
+
+  # ------------------------------------- optional 2nd backend (vendor-neutral demo)
+  jaeger:
+    image: jaegertracing/jaeger:2.5.0
+    profiles: [jaeger]
+    ports: ["16686:16686"]
+    restart: unless-stopped
+
+volumes:
+  tempo-data:

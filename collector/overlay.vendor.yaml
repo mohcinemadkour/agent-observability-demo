@@ -1,0 +1,22 @@
+# Vendor-neutral demo, part 2: send the same traces to an OTLP-compatible SaaS.
+# Zero changes to the agent. Set the values in .env, then:  make backend-vendor
+#
+# Preconfigured for Splunk Observability Cloud:
+#   VENDOR_TRACES_URL=https://ingest.<realm>.signalfx.com/v2/trace/otlp
+#   VENDOR_TOKEN=<access token>
+# For another vendor, change the header name below and use its full OTLP/HTTP
+# traces URL, e.g. Honeycomb: https://api.honeycomb.io/v1/traces with header
+# x-honeycomb-team. Check the vendor's docs for exact values.
+#
+# Only traces are wired here; metrics/logs endpoints differ per vendor and are
+# added to their pipelines the same way.
+exporters:
+  otlphttp/vendor:
+    traces_endpoint: ${env:VENDOR_TRACES_URL}
+    headers:
+      X-SF-Token: ${env:VENDOR_TOKEN}
+
+service:
+  pipelines:
+    traces:
+      exporters: [otlp/tempo, spanmetrics, otlphttp/vendor]
