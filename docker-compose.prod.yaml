@@ -47,7 +47,11 @@ services:
       GF_SERVER_ROOT_URL: https://${DASHBOARD_DOMAIN}
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
-      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # GRAFANA_PUBLIC=true opens dashboards read-only to anyone (public demo with
+      # synthetic data only). Keep it false on any server that holds client data.
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_PUBLIC:-false}
+      GF_AUTH_ANONYMOUS_ORG_NAME: Main Org.
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_DISABLE_LOGIN_FORM: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer
